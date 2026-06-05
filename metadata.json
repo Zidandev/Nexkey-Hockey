@@ -1,0 +1,6 @@
+{
+  "name": "Nexkey",
+  "description": "An immersive Neon Matrix Air Hockey game featuring singleplayer AI, real-time multiplayer, a progression level/EXP system, an in-game shop for customizable paddles & boards, and an advanced admin dashboard. Credits by Zidandev.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
