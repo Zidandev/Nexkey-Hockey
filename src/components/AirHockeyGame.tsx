@@ -1122,7 +1122,8 @@ export default function AirHockeyGame({
           puckVelocity: velocity,
           priorAiMessage: priorMessage,
           playerReply: reply,
-          phase
+          phase,
+          language: settings.language
         })
       });
       const data = await response.json();

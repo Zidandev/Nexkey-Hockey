@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import express from 'express';
 import path from 'path';
 import http from 'http';
@@ -330,30 +331,57 @@ async function startServer() {
 
   app.post('/api/gemini/dialogue', async (req, res) => {
     try {
-      const { scorer, puckVelocity, priorAiMessage, playerReply, phase } = req.body;
+      const { scorer, puckVelocity, priorAiMessage, playerReply, phase, language } = req.body;
       const apiKey = process.env.GEMINI_API_KEY;
+      const lang = language === 'id' ? 'id' : 'en';
 
       if (!apiKey) {
         // Fallback characters answers if Gemini key is not configured
-        let fallback = 'Ayo main lagi!';
-        if (phase === 1) {
-          if (scorer === 'player') {
-            fallback = puckVelocity > 15 ? 'Seramnyaa, pelan-pelan pliss!' : 'Alah pengecut, beraninya nunggu!';
+        let fallback = '';
+        if (lang === 'en') {
+          fallback = 'Let\'s play again!';
+          if (phase === 1) {
+            if (scorer === 'player') {
+              fallback = puckVelocity > 15 
+                ? 'Terrifying hit, please slow down!' 
+                : 'What a camper, only waiting for coward goals!';
+            } else {
+              fallback = 'Haha in! Upgrade your skills first!';
+            }
           } else {
-            fallback = 'Hahaha masuk! Makanya naikin skillnya dulu!';
+            fallback = 'Too many excuses, let\'s duel again!';
           }
         } else {
-          fallback = 'Alah banyak alesan, ayo tanding lagi aja!';
+          fallback = 'Ayo main lagi!';
+          if (phase === 1) {
+            if (scorer === 'player') {
+              fallback = puckVelocity > 15 
+                ? 'Ngeri bgt bray, pelan-pelan dong pliss!' 
+                : 'Alah camper, beraninya nunggu gol pengecut!';
+            } else {
+              fallback = 'Hahaha masuk! Makanya naikin dulu skill lu!';
+            }
+          } else {
+            fallback = 'Halah banyak alesan, ayo tanding lagi!';
+          }
         }
         return res.json({ success: true, text: fallback });
       }
 
       const client = getGeminiClient();
 
-      const systemPrompt = `You are playing as an arcade Air Hockey opponent against a human player in our retro cabinet game "Nexkey".
+      let systemPrompt = '';
+      if (lang === 'en') {
+        systemPrompt = `You are playing as an arcade Air Hockey opponent against a human player in our retro cabinet game "Nexkey".
 Your personality is highly energetic, witty, extremely competitive, cheeky, funny, and dramatic.
-You must respond in an engaging, casual blend of Malaysian/Indonesian gaming slang (and occasional English) with some code-switching (gamer lingo, conversational phrasing, playful jabs).
+You must respond in an engaging, casual English with gamer lingo/slang (playful jabs, conversational framing, trash talk).
 Keep your response short (strictly under 15 words) and extremely punchy. Do not use hashtags, prefixes like "AI:", or markdown headers.`;
+      } else {
+        systemPrompt = `Anda sedang bermain sebagai lawan Air Hockey arkade melawan pemain manusia di game kabinet retro kami "Nexkey".
+Kepribadian Anda sangat energik, jenaka, sangat kompetitif, usil/cheeky, lucu, dan dramatis.
+Anda harus merespons dengan bahasa Indonesia gaul/slang gamer kekinian yang asyik (seperti "ez", "bocil", "hoki", "noob", "savage", dsb) serta penuh candaan yang menyenangkan. Jangan gunakan bahasa Melayu/Malaysia.
+Jaga agar tanggapan Anda sangat singkat (di bawah 15 kata) dan sangat pukau/lucu. Jangan gunakan tanda pagar (hashtag), awalan seperti "AI:", atau tajuk markdown.`;
+      }
 
       let userPrompt = '';
 
@@ -377,7 +405,7 @@ Acknowledge and answer their reply in our gaming persona. Conclude this brief ch
       }
 
       const response = await client.models.generateContent({
-        model: 'gemini-3.5-flash',
+        model: 'gemini-2.5-flash',
         contents: userPrompt,
         config: {
           systemInstruction: systemPrompt,
@@ -389,7 +417,11 @@ Acknowledge and answer their reply in our gaming persona. Conclude this brief ch
       res.json({ success: true, text: replyText });
     } catch (err: any) {
       console.error('Gemini Dialogue Generation error:', err);
-      res.json({ success: true, text: 'Ayo buruan mulai lagi, berisik!' });
+      const isIndo = req.body?.language === 'id' || !req.body?.language;
+      const fallbackMsg = isIndo 
+        ? `Ayo buruan mulai lagi, berisik! (Error: ${err.message})`
+        : `Come on, let's start over, noisy! (Error: ${err.message})`;
+      res.json({ success: true, text: fallbackMsg });
     }
   });
 
