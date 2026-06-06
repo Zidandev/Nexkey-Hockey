@@ -17,7 +17,7 @@ class GeminiController extends Controller
             $playerReply = $request->input('playerReply');
             $phase = (int)$request->input('phase');
 
-            $apiKey = env('GEMINI_API_KEY');
+            $apiKey = config('app.gemini_api_key');
 
             // Fallback replies if API Key is not configured
             if (!$apiKey) {

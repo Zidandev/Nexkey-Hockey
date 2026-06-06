@@ -62,6 +62,8 @@ return [
 
     'cipher' => 'AES-256-CBC',
 
+    'gemini_api_key' => env('GEMINI_API_KEY'),
+
     /*
     |--------------------------------------------------------------------------
     | Autoloaded Service Providers
