@@ -33,7 +33,7 @@ export interface MatchHistory {
   userId: string;
   opponentName: string;
   mode: 'ai' | 'multiplayer';
-  playerRank: 'win' | 'loss';
+  playerRank: 'win' | 'loss' | 'draw';
   scoreSelf: number;
   scoreOpponent: number;
   expEarned: number;
@@ -95,6 +95,7 @@ export interface LiveGameState {
   status: 'waiting' | 'lobby' | 'playing' | 'active' | 'finished';
   winnerId?: string;
   boardSkin: string; // Board skin style
+  timeLeft?: number;
   lastUpdated: number;
 }
 

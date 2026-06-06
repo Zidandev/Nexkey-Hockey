@@ -5,6 +5,7 @@ import { WebSocketServer, WebSocket } from 'ws';
 import { createServer as createViteServer } from 'vite';
 import { db } from './server/db/database';
 import { User, UserRole, LiveGameState, GameCoordinates } from './src/types';
+import { GoogleGenAI } from '@google/genai';
 
 interface CustomWebSocket extends WebSocket {
   gameId?: string;
@@ -307,6 +308,91 @@ async function startServer() {
     }
   });
 
+  // --- GEMINI AI LAZY-LOAD CLIENT & INTERACTIVE CHARACTER DIALOGUE ---
+  let aiClient: GoogleGenAI | null = null;
+  function getGeminiClient() {
+    if (!aiClient) {
+      const apiKey = process.env.GEMINI_API_KEY;
+      if (!apiKey) {
+        throw new Error('GEMINI_API_KEY environment variable is missing in system secrets');
+      }
+      aiClient = new GoogleGenAI({
+        apiKey,
+        httpOptions: {
+          headers: {
+            'User-Agent': 'aistudio-build',
+          }
+        }
+      });
+    }
+    return aiClient;
+  }
+
+  app.post('/api/gemini/dialogue', async (req, res) => {
+    try {
+      const { scorer, puckVelocity, priorAiMessage, playerReply, phase } = req.body;
+      const apiKey = process.env.GEMINI_API_KEY;
+
+      if (!apiKey) {
+        // Fallback characters answers if Gemini key is not configured
+        let fallback = 'Ayo main lagi!';
+        if (phase === 1) {
+          if (scorer === 'player') {
+            fallback = puckVelocity > 15 ? 'Seramnyaa, pelan-pelan pliss!' : 'Alah pengecut, beraninya nunggu!';
+          } else {
+            fallback = 'Hahaha masuk! Makanya naikin skillnya dulu!';
+          }
+        } else {
+          fallback = 'Alah banyak alesan, ayo tanding lagi aja!';
+        }
+        return res.json({ success: true, text: fallback });
+      }
+
+      const client = getGeminiClient();
+
+      const systemPrompt = `You are playing as an arcade Air Hockey opponent against a human player in our retro cabinet game "Nexkey".
+Your personality is highly energetic, witty, extremely competitive, cheeky, funny, and dramatic.
+You must respond in an engaging, casual blend of Malaysian/Indonesian gaming slang (and occasional English) with some code-switching (gamer lingo, conversational phrasing, playful jabs).
+Keep your response short (strictly under 15 words) and extremely punchy. Do not use hashtags, prefixes like "AI:", or markdown headers.`;
+
+      let userPrompt = '';
+
+      if (phase === 1) {
+        if (scorer === 'player') {
+          if (puckVelocity > 15) {
+            userPrompt = `The player just scored a goal with a furious, incredibly high speed strike (velocity: ${parseFloat(puckVelocity).toFixed(1)} px/frame).
+You are terrified, deeply shaken, and plead for them to calm down or show mercy. Keep it fun and dramatic. Mention their aggressive hit.`;
+          } else {
+            userPrompt = `The player scored with a slow, careful, passive, defensive strike (velocity: ${parseFloat(puckVelocity).toFixed(1)} px/frame).
+You are annoyed, teasing, and mock them as a fearful camper who only waits and scores cowards' goals.`;
+          }
+        } else {
+          userPrompt = `You (the AI opponent) just scored a goal! 
+Mock and roast the player's failed defense triumphantly. Keep it cheeky and hilarious.`;
+        }
+      } else {
+        userPrompt = `A moment ago, you said: "${priorAiMessage}". 
+The human player replied: "${playerReply}".
+Acknowledge and answer their reply in our gaming persona. Conclude this brief chat exchange. Keep it strictly under 15 words.`;
+      }
+
+      const response = await client.models.generateContent({
+        model: 'gemini-3.5-flash',
+        contents: userPrompt,
+        config: {
+          systemInstruction: systemPrompt,
+          temperature: 0.9,
+        }
+      });
+
+      const replyText = response.text?.trim() || 'Ayo lanjut!';
+      res.json({ success: true, text: replyText });
+    } catch (err: any) {
+      console.error('Gemini Dialogue Generation error:', err);
+      res.json({ success: true, text: 'Ayo buruan mulai lagi, berisik!' });
+    }
+  });
+
   // Admin Dashboard - Get All Players (Admin Mode)
   app.get('/api/admin/players', (req, res) => {
     try {
@@ -582,116 +668,12 @@ async function startServer() {
 
   // Authoritative server-side high refresh rate puck physics loop
   function startGamePhysicsLoop(gameId: string) {
-    const tickRateMs = 16; // ~60fps calculations
-    let interval = setInterval(() => {
-      const g = activeGames.get(gameId);
-      if (!g || (g.status !== 'active' && g.status !== 'playing')) {
-        clearInterval(interval);
-        return;
-      }
-
-      let puck = g.puck;
-      
-      // Update coordinates
-      puck.pos.x += puck.vel.x;
-      puck.pos.y += puck.vel.y;
-
-      // Decay velocity slightly (friction)
-      puck.vel.x *= 0.99;
-      puck.vel.y *= 0.99;
-
-      // Arena constraints: width = 750, height = 1000
-      const puckRadius = 18;
-      const margin = 0;
-
-      // Bounce off lateral left / right walls
-      if (puck.pos.x - puckRadius <= margin) {
-        puck.pos.x = margin + puckRadius;
-        puck.vel.x = -puck.vel.x * 0.9; // bounce elasticity
-      } else if (puck.pos.x + puckRadius >= 750 - margin) {
-        puck.pos.x = 750 - margin - puckRadius;
-        puck.vel.x = -puck.vel.x * 0.9;
-      }
-
-      // Check goals or top/bottom walls (goal opening is between X: 250 and X: 500)
-      const goalMinX = 250;
-      const goalMaxX = 500;
-
-      // Top wall / Player 2 Goal
-      if (puck.pos.y - puckRadius <= margin) {
-        if (puck.pos.x >= goalMinX && puck.pos.x <= goalMaxX) {
-          // Goal Player 1 scored!
-          if (g.player1) g.player1.score += 1;
-          resetPuck(g);
-          broadcastGameUpdate(gameId);
-          checkGameOver(gameId);
-          return;
-        } else {
-          puck.pos.y = margin + puckRadius;
-          puck.vel.y = -puck.vel.y * 0.9;
-        }
-      }
-
-      // Bottom wall / Player 1 Goal
-      if (puck.pos.y + puckRadius >= 1000 - margin) {
-        if (puck.pos.x >= goalMinX && puck.pos.x <= goalMaxX) {
-          // Goal Player 2 scored!
-          if (g.player2) g.player2.score += 1;
-          resetPuck(g);
-          broadcastGameUpdate(gameId);
-          checkGameOver(gameId);
-          return;
-        } else {
-          puck.pos.y = 1000 - margin - puckRadius;
-          puck.vel.y = -puck.vel.y * 0.9;
-        }
-      }
-
-      // Handle paddle collisions
-      const paddleRadius = 30;
-      
-      // P1 Paddle Collision
-      if (g.player1) {
-        const dx = puck.pos.x - g.player1.pos.x;
-        const dy = puck.pos.y - g.player1.pos.y;
-        const dist = Math.hypot(dx, dy);
-        const minDist = puckRadius + paddleRadius;
-
-        if (dist < minDist) {
-          // Push puck out of paddle
-          const angle = Math.atan2(dy, dx);
-          puck.pos.x = g.player1.pos.x + Math.cos(angle) * minDist;
-          puck.pos.y = g.player1.pos.y + Math.sin(angle) * minDist;
-
-          // Transfer paddle velocity
-          const impulse = 6;
-          puck.vel.x = Math.cos(angle) * impulse + (Math.random() - 0.5) * 1.5;
-          puck.vel.y = Math.sin(angle) * impulse + (Math.random() - 0.5) * 1.5;
-        }
-      }
-
-      // P2 Paddle Collision
-      if (g.player2) {
-        const dx = puck.pos.x - g.player2.pos.x;
-        const dy = puck.pos.y - g.player2.pos.y;
-        const dist = Math.hypot(dx, dy);
-        const minDist = puckRadius + paddleRadius;
-
-        if (dist < minDist) {
-          const angle = Math.atan2(dy, dx);
-          puck.pos.x = g.player2.pos.x + Math.cos(angle) * minDist;
-          puck.pos.y = g.player2.pos.y + Math.sin(angle) * minDist;
-
-          const impulse = 6;
-          puck.vel.x = Math.cos(angle) * impulse + (Math.random() - 0.5) * 1.5;
-          puck.vel.y = Math.sin(angle) * impulse + (Math.random() - 0.5) * 1.5;
-        }
-      }
-
-      g.lastUpdated = Date.now();
-      broadcastGameUpdate(gameId);
-    }, tickRateMs);
+    // Under Host Authority model, Player 1 (creator) computes physics tick frames locally,
+    // so we bypass server-side physics loops to avoid conflicting updates and packet jitter.
+    return;
   }
+
+
 
   function resetPuck(game: LiveGameState) {
     game.puck.pos = { x: 375, y: 500 };
@@ -735,49 +717,60 @@ async function startServer() {
     });
   }
 
-  function checkGameOver(gameId: string) {
+  function checkGameOver(gameId: string, isForceTimeUp: boolean = false) {
     const g = activeGames.get(gameId);
     if (!g) return;
 
-    const winningScore = 5;
-    if ((g.player1 && g.player1.score >= winningScore) || (g.player2 && g.player2.score >= winningScore)) {
+    if (isForceTimeUp) {
       g.status = 'finished';
       db.updateRoom(gameId, { status: 'finished' });
-      
-      const winnerId = (g.player1 && g.player1.score >= winningScore) ? g.player1.id : g.player2!.id;
+
+      const p1Score = g.player1?.score || 0;
+      const p2Score = g.player2?.score || 0;
+
+      // Determine winner based on score
+      let winnerId = null;
+      let isDraw = p1Score === p2Score;
+      if (p1Score > p2Score) {
+        winnerId = g.player1?.id;
+      } else if (p2Score > p1Score) {
+        winnerId = g.player2?.id;
+      }
+
       g.winnerId = winnerId;
 
       // Broadcast game over event
       const payload = JSON.stringify({
         type: 'game_over',
         game: g,
-        winnerId
+        winnerId,
+        isDraw
       });
 
       // Update their records in database with reward
-      const loserId = winnerId === g.player1?.id ? g.player2?.id : g.player1?.id;
-      
-      if (winnerId) {
-        db.addMatchRecord(winnerId, {
-          opponentName: (winnerId === g.player1?.id ? g.player2?.username : g.player1?.username) || 'Player',
+      if (g.player1) {
+        const isP1Win = winnerId === g.player1.id;
+        db.addMatchRecord(g.player1.id, {
+          opponentName: g.player2?.username || 'Opponent',
           mode: 'multiplayer',
-          playerRank: 'win',
-          scoreSelf: winningScore,
-          scoreOpponent: (winnerId === g.player1?.id ? g.player2?.score : g.player1?.score) || 0,
-          expEarned: 40,
-          currencyEarned: 50
+          playerRank: isDraw ? 'draw' : (isP1Win ? 'win' : 'loss'),
+          scoreSelf: p1Score,
+          scoreOpponent: p2Score,
+          expEarned: isDraw ? 25 : (isP1Win ? 40 : 15),
+          currencyEarned: isDraw ? 30 : (isP1Win ? 50 : 15)
         });
       }
 
-      if (loserId) {
-        db.addMatchRecord(loserId, {
-          opponentName: (loserId === g.player1?.id ? g.player2?.username : g.player1?.username) || 'Player',
+      if (g.player2 && g.player2.id) {
+        const isP2Win = winnerId === g.player2.id;
+        db.addMatchRecord(g.player2.id, {
+          opponentName: g.player1?.username || 'Opponent',
           mode: 'multiplayer',
-          playerRank: 'loss',
-          scoreSelf: (loserId === g.player1?.id ? g.player1?.score : g.player2?.score) || 0,
-          scoreOpponent: winningScore,
-          expEarned: 15,
-          currencyEarned: 15
+          playerRank: isDraw ? 'draw' : (isP2Win ? 'win' : 'loss'),
+          scoreSelf: p2Score,
+          scoreOpponent: p1Score,
+          expEarned: isDraw ? 25 : (isP2Win ? 40 : 15),
+          currencyEarned: isDraw ? 30 : (isP2Win ? 50 : 15)
         });
       }
 
@@ -890,9 +883,9 @@ async function startServer() {
             break;
           }
 
-          // Active paddle dynamic coordinate sync
+          // Active paddle dynamic coordinate sync & host-authoritative puck / score relay
           case 'move_paddle': {
-            const { gameId, role, x, y } = data;
+            const { gameId, role, x, y, puck, scores, isTimeUp, timeLeft } = data;
             const liveGame = activeGames.get(gameId);
             if (!liveGame || (liveGame.status !== 'active' && liveGame.status !== 'playing')) return;
 
@@ -900,6 +893,20 @@ async function startServer() {
               // Restrict player 1 paddle coordinates to lower arena hemifield (y: 500 to 1000)
               liveGame.player1.pos.x = Math.max(30, Math.min(720, x));
               liveGame.player1.pos.y = Math.max(505, Math.min(970, y));
+
+              // Host authority: update puck pos, vel, and match counters
+              if (puck && puck.pos && puck.vel) {
+                liveGame.puck.pos = puck.pos;
+                liveGame.puck.vel = puck.vel;
+              }
+              if (timeLeft !== undefined) {
+                liveGame.timeLeft = timeLeft;
+              }
+              if (scores) {
+                if (liveGame.player1) liveGame.player1.score = scores.p1;
+                if (liveGame.player2) liveGame.player2.score = scores.p2;
+                checkGameOver(gameId, isTimeUp || false);
+              }
             } else if (role === 'p2' && liveGame.player2) {
               // Restrict player 2 paddle coordinates to upper arena hemifield (y: 0 to 495)
               liveGame.player2.pos.x = Math.max(30, Math.min(720, x));

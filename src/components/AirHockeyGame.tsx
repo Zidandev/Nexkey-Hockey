@@ -370,7 +370,7 @@ export default function AirHockeyGame({
   const [gameState, setGameState] = useState<'lobby' | 'playing' | 'gameover'>('lobby');
   const [multiplayerStatus, setMultiplayerStatus] = useState<string>('Connecting... ');
   const [lobbyReady, setLobbyReady] = useState(false);
-  const [endSummary, setEndSummary] = useState<{ win: boolean; scoreSelf: number; scoreOpponent: number } | null>(null);
+  const [endSummary, setEndSummary] = useState<{ win: boolean; scoreSelf: number; scoreOpponent: number; isDraw?: boolean } | null>(null);
   const [role, setRole] = useState<'p1' | 'p2'>('p1');
 
   useEffect(() => {
@@ -405,6 +405,83 @@ export default function AirHockeyGame({
       document.body.classList.remove('playing-game');
     };
   }, [gameState]);
+
+  // End game cleanly when the 120 seconds run out
+  const triggerTimeUpEnd = () => {
+    const selfScore = scoreRef.current.self;
+    const oppScore = scoreRef.current.opponent;
+    const won = selfScore > oppScore;
+    const isDraw = selfScore === oppScore;
+
+    setEndSummary({
+      win: won && !isDraw,
+      scoreSelf: selfScore,
+      scoreOpponent: oppScore,
+      isDraw: isDraw
+    });
+
+    setGameState('gameover');
+    synthInstance.playGameOver(won && !isDraw);
+
+    // Persist to DB or send socket signal if multiplayer
+    if (gameMode === 'ai') {
+      onGameCompleted(won && !isDraw, selfScore, oppScore);
+    } else {
+      if (role === 'p1') {
+        if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+          wsRef.current.send(JSON.stringify({
+            type: 'move_paddle',
+            gameId: wsRef.current && (wsRef.current as any).gameId,
+            role: 'p1',
+            x: playerPaddle.current.x,
+            y: playerPaddle.current.y,
+            puck: { pos: puckPos.current, vel: puckVel.current },
+            scores: { p1: selfScore, p2: oppScore },
+            timeLeft: 0,
+            isTimeUp: true
+          }));
+        }
+      }
+    }
+  };
+
+  // Primary Countdown Timer hook
+  useEffect(() => {
+    if (gameState !== 'playing') return;
+
+    const interval = setInterval(() => {
+      if (isDialogueOpenRef.current) return;
+
+      if (timeLeftRef.current <= 1) {
+        clearInterval(interval);
+        timeLeftRef.current = 0;
+        setTimeLeft(0);
+        triggerTimeUpEnd();
+      } else {
+        timeLeftRef.current -= 1;
+        setTimeLeft(timeLeftRef.current);
+
+        // Host authoritatively synchronized timeLeft
+        if (gameMode === 'multiplayer' && role === 'p1') {
+          if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+            wsRef.current.send(JSON.stringify({
+              type: 'move_paddle',
+              gameId: wsRef.current && (wsRef.current as any).gameId,
+              role: 'p1',
+              x: playerPaddle.current.x,
+              y: playerPaddle.current.y,
+              puck: { pos: puckPos.current, vel: puckVel.current },
+              scores: { p1: scoreRef.current.self, p2: scoreRef.current.opponent },
+              timeLeft: timeLeftRef.current,
+              isTimeUp: false
+            }));
+          }
+        }
+      }
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [gameState, gameMode, role]);
 
   // Unified dynamic scaling system to preserve the strict 3:4 arena ratio on desktop & mobile screen bounds
   useEffect(() => {
@@ -472,6 +549,22 @@ export default function AirHockeyGame({
 
   // Internal Gameplay state (for physics / AI / sync rendering)
   const scoreRef = useRef({ self: 0, opponent: 0 });
+  const isScoringRef = useRef(false);
+
+  // --- Strict 2-minute countdown timer states ---
+  const [timeLeft, setTimeLeft] = useState(120);
+  const timeLeftRef = useRef(120);
+
+  // --- Gemini AI Dynamic Arcade Dialogue systems ---
+  const [isDialogueOpen, setIsDialogueOpen] = useState(false);
+  const isDialogueOpenRef = useRef(false);
+  const [dialogueScorer, setDialogueScorer] = useState<'player' | 'ai'>('player');
+  const [dialogueVelocity, setDialogueVelocity] = useState<number>(0);
+  const [dialoguePhase, setDialoguePhase] = useState<1 | 2 | 3>(1); // 1 = AI reaction, 2 = Player replying, 3 = AI final retort
+  const [dialogueText, setDialogueText] = useState('');
+  const [playerReplyInput, setPlayerReplyInput] = useState('');
+  const [isAiLoading, setIsAiLoading] = useState(false);
+
   const arenaWidth = 750;
   const arenaHeight = 1000;
   const puckRadius = 18;
@@ -506,6 +599,12 @@ export default function AirHockeyGame({
         alpha: 1.0,
         decay: Math.random() * 0.03 + 0.015
       });
+    }
+    
+    // Maintain a strict maximum particles array buffer length to solve memory leaks and RAM overload
+    const maxParticles = graphicsQuality === 'high' ? 120 : 60;
+    if (particlesRef.current.length > maxParticles) {
+      particlesRef.current = particlesRef.current.slice(-maxParticles);
     }
   };
 
@@ -869,6 +968,7 @@ export default function AirHockeyGame({
   useEffect(() => {
     if (gameMode === 'multiplayer' && multiplayerView === 'lobby_room' && currentRoom) {
       const socket = new WebSocket(socketUrl);
+      (socket as any).gameId = currentRoom.id;
       wsRef.current = socket;
 
       socket.onopen = () => {
@@ -913,6 +1013,9 @@ export default function AirHockeyGame({
               frameCounter: 0
             };
             setGameState('playing');
+            setTimeLeft(120);
+            timeLeftRef.current = 120;
+            isScoringRef.current = false;
             synthInstance.playScore();
           } else if (message.type === 'lobby_host_left') {
             setHostLeftMessage(message.message);
@@ -922,20 +1025,35 @@ export default function AirHockeyGame({
             setLobbyReady(false);
           } else if (message.type === 'game_state') {
             const serverGame: LiveGameState = message.game;
-            puckPos.current = serverGame.puck.pos;
-            puckVel.current = serverGame.puck.vel;
             
             if (role === 'p1') {
+              // P1 has Host Authority and runs physics locally, so we do not overwrite puck coordinates.
               scoreRef.current.self = serverGame.player1?.score || 0;
               scoreRef.current.opponent = serverGame.player2?.score || 0;
               if (serverGame.player2) {
                 opponentPaddle.current = serverGame.player2.pos;
               }
             } else {
+              // P2 is client-only receiver and receives isomorphic flipped physics coordinates
+              puckPos.current = {
+                x: arenaWidth - serverGame.puck.pos.x,
+                y: arenaHeight - serverGame.puck.pos.y
+              };
+              puckVel.current = {
+                x: -serverGame.puck.vel.x,
+                y: -serverGame.puck.vel.y
+              };
               scoreRef.current.self = serverGame.player2?.score || 0;
               scoreRef.current.opponent = serverGame.player1?.score || 0;
+              if (serverGame.timeLeft !== undefined) {
+                setTimeLeft(serverGame.timeLeft);
+                timeLeftRef.current = serverGame.timeLeft;
+              }
               if (serverGame.player1) {
-                opponentPaddle.current = serverGame.player1.pos;
+                opponentPaddle.current = {
+                  x: arenaWidth - serverGame.player1.pos.x,
+                  y: arenaHeight - serverGame.player1.pos.y
+                };
               }
             }
           } else if (message.type === 'opponent_disconnected') {
@@ -984,6 +1102,92 @@ export default function AirHockeyGame({
     }
   }, [gameMode, currentRoom, multiplayerView, socketUrl, user.id, role, gameState]);
 
+  // Interactive Dialogue Fetcher from server-side proxy
+  const fetchGeminiDialogue = async (
+    scorer: 'player' | 'ai',
+    velocity: number,
+    priorMessage: string = '',
+    reply: string = '',
+    phase: number = 1
+  ) => {
+    setIsAiLoading(true);
+    try {
+      const response = await fetch('/api/gemini/dialogue', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          scorer,
+          puckVelocity: velocity,
+          priorAiMessage: priorMessage,
+          playerReply: reply,
+          phase
+        })
+      });
+      const data = await response.json();
+      if (data.success && data.text) {
+        setDialogueText(data.text);
+      } else {
+        setDialogueText('Keren juga! Ayo kita tanding lagi!');
+      }
+    } catch (err) {
+      console.error('Failed to get Gemini dialogue response:', err);
+      setDialogueText('Woi, fokus tanding dulu! Sini hajar lagi!');
+    } finally {
+      setIsAiLoading(false);
+    }
+  };
+
+  // Match Goal Scored Handler
+  const checkAndAwardMatchProgress = (lastScorer: 'player' | 'ai', hitVelocity: number = 0) => {
+    // Win condition is governed by the 2-minute timer countdown, so we do not trigger gameover here.
+    if (gameMode === 'ai') {
+      setDialogueScorer(lastScorer);
+      setDialogueVelocity(hitVelocity);
+      setDialoguePhase(1);
+      setPlayerReplyInput('');
+      setDialogueText('Menganalisis gol...');
+      
+      isDialogueOpenRef.current = true;
+      setIsDialogueOpen(true);
+      
+      // Fetch dialogue reaction
+      fetchGeminiDialogue(lastScorer, hitVelocity, '', '', 1);
+    } else {
+      // Multiplayer modes: reset the puck immediately for continuous fast play
+      puckPos.current = { x: 375, y: 500 };
+      puckVel.current = {
+        x: (Math.random() > 0.5 ? 2.5 : -2.5) + (Math.random() - 0.5),
+        y: (Math.random() > 0.5 ? 4 : -4) + (Math.random() - 0.5)
+      };
+      setTimeout(() => {
+        isScoringRef.current = false;
+      }, 300);
+    }
+  };
+
+  const handleSendPlayerReply = () => {
+    if (!playerReplyInput.trim() || isAiLoading) return;
+    setDialoguePhase(3);
+    fetchGeminiDialogue(dialogueScorer, dialogueVelocity, dialogueText, playerReplyInput, 3);
+  };
+
+  const handleResumeGameAndCloseDialogue = () => {
+    puckPos.current = { x: 375, y: 500 };
+    puckVel.current = {
+      x: (Math.random() > 0.5 ? 2.5 : -2.5) + (Math.random() - 0.5),
+      y: (Math.random() > 0.5 ? 4 : -4) + (Math.random() - 0.5)
+    };
+    
+    isDialogueOpenRef.current = false;
+    setIsDialogueOpen(false);
+    
+    setTimeout(() => {
+      isScoringRef.current = false;
+    }, 300);
+  };
+
   // Starts AI Single Player mode
   const handleStartAiGame = () => {
     scoreRef.current = { self: 0, opponent: 0 };
@@ -998,6 +1202,16 @@ export default function AirHockeyGame({
     };
     puckTrail.current = [];
     coordinateTrackingRef.current = [{ x: 375, y: 850 }];
+    
+    // Reset Strict countdown counters
+    setTimeLeft(120);
+    timeLeftRef.current = 120;
+    
+    // Close dialogue systems
+    isDialogueOpenRef.current = false;
+    setIsDialogueOpen(false);
+    isScoringRef.current = false;
+
     analyticsDataRef.current = {
       framesInOffense: 0,
       framesInDefense: 0,
@@ -1223,11 +1437,25 @@ export default function AirHockeyGame({
         lastOpponentPaddlePos.current = { x: opponentPaddle.current.x, y: opponentPaddle.current.y };
 
         // Add puck trails coordinates
+        const trailMaxLen = graphicsQuality === 'low' ? 3 : graphicsQuality === 'medium' ? 7 : 14;
         puckTrail.current.push({ x: puckPos.current.x, y: puckPos.current.y });
-        if (puckTrail.current.length > 10) {
+        while (puckTrail.current.length > trailMaxLen) {
           puckTrail.current.shift();
         }
-        return;
+
+        if (role === 'p2') {
+          // Player 2 is client-only receiver: send local paddle update, do not run physics simulation
+          if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN && currentRoom) {
+            wsRef.current.send(JSON.stringify({
+              type: 'move_paddle',
+              gameId: currentRoom.id,
+              role: 'p2',
+              x: arenaWidth - playerPaddle.current.x,
+              y: arenaHeight - playerPaddle.current.y
+            }));
+          }
+          return;
+        }
       }
 
       // Singleplayer Local Advanced Physics Loop
@@ -1235,105 +1463,107 @@ export default function AirHockeyGame({
       const vel = puckVel.current;
       const bot = opponentPaddle.current;
 
-      // Update puck history coordinates queue to simulate reaction time latency
-      puckHistoryRef.current.push({ x: puck.x, y: puck.y });
-      if (puckHistoryRef.current.length > 120) {
-        puckHistoryRef.current.shift();
-      }
+      if (gameMode !== 'multiplayer') {
+        // Update puck history coordinates queue to simulate reaction time latency
+        puckHistoryRef.current.push({ x: puck.x, y: puck.y });
+        if (puckHistoryRef.current.length > 120) {
+          puckHistoryRef.current.shift();
+        }
 
-      // Fetch a coordinate from the past based on difficulty delay
-      const getDelayedPuck = () => {
-        const history = puckHistoryRef.current;
-        if (history.length === 0) return { x: puck.x, y: puck.y };
-        const idx = Math.max(0, history.length - 1 - delayFrames);
-        return history[idx];
-      };
+        // Fetch a coordinate from the past based on difficulty delay
+        const getDelayedPuck = () => {
+          const history = puckHistoryRef.current;
+          if (history.length === 0) return { x: puck.x, y: puck.y };
+          const idx = Math.max(0, history.length - 1 - delayFrames);
+          return history[idx];
+        };
 
-      const delayedPuck = getDelayedPuck();
+        const delayedPuck = getDelayedPuck();
 
-      // 1. Reactive AI Perception with custom latency lag
-      perceivedPuck.x += (delayedPuck.x - perceivedPuck.x) * lagFactor;
-      perceivedPuck.y += (delayedPuck.y - perceivedPuck.y) * lagFactor;
+        // 1. Reactive AI Perception with custom latency lag
+        perceivedPuck.x += (delayedPuck.x - perceivedPuck.x) * lagFactor;
+        perceivedPuck.y += (delayedPuck.y - perceivedPuck.y) * lagFactor;
 
-      // Reset or fluctuate target offsets to simulate human prediction offset errors
-      aiOffsetTimer--;
-      if (aiOffsetTimer <= 0) {
-        aiOffsetTimer = 15 + Math.round(Math.random() * 25);
-        aiOffsetX = (Math.random() - 0.5) * maxNoise;
-        aiOffsetY = (Math.random() - 0.5) * maxNoise;
-      }
+        // Reset or fluctuate target offsets to simulate human prediction offset errors
+        aiOffsetTimer--;
+        if (aiOffsetTimer <= 0) {
+          aiOffsetTimer = 15 + Math.round(Math.random() * 25);
+          aiOffsetX = (Math.random() - 0.5) * maxNoise;
+          aiOffsetY = (Math.random() - 0.5) * maxNoise;
+        }
 
-      let targetX = arenaWidth / 2;
-      let targetY = 150;
+        let targetX = arenaWidth / 2;
+        let targetY = 150;
 
-      // Simple AI state machine driven by delayed perception
-      if (delayedPuck.y < arenaHeight / 2) {
-        // Puck is inside AI opponent's active territory
-        if (bot.y > delayedPuck.y - 12) {
-          // RECOVER MODE: Puck is behind AI. Avoid hitting own goal - quickly navigate around it.
-          targetY = Math.max(paddleRadius + 15, delayedPuck.y - 65 + aiOffsetY);
-          if (delayedPuck.x > arenaWidth / 2) {
-            targetX = delayedPuck.x - 70 + aiOffsetX;
+        // Simple AI state machine driven by delayed perception
+        if (delayedPuck.y < arenaHeight / 2) {
+          // Puck is inside AI opponent's active territory
+          if (bot.y > delayedPuck.y - 12) {
+            // RECOVER MODE: Puck is behind AI. Avoid hitting own goal - quickly navigate around it.
+            targetY = Math.max(paddleRadius + 15, delayedPuck.y - 65 + aiOffsetY);
+            if (delayedPuck.x > arenaWidth / 2) {
+              targetX = delayedPuck.x - 70 + aiOffsetX;
+            } else {
+              targetX = delayedPuck.x + 70 + aiOffsetX;
+            }
           } else {
-            targetX = delayedPuck.x + 70 + aiOffsetX;
+            // ATTACK MODE: AI in position behind puck. Set up and execute a dynamic strike!
+            const targetGoalX = 375 + aiOffsetX * 3; // Aim with randomized error offsets
+            const targetGoalY = arenaHeight;
+
+            const dirX = delayedPuck.x - targetGoalX;
+            const dirY = delayedPuck.y - targetGoalY;
+            const distGoal = Math.hypot(dirX, dirY) || 1;
+            const uX = dirX / distGoal;
+            const uY = dirY / distGoal;
+
+            // Target a position behind the puck aligned with player's goal
+            const prepX = delayedPuck.x + uX * (paddleRadius + puckRadius + 15);
+            const prepY = delayedPuck.y + uY * (paddleRadius + puckRadius + 15);
+
+            const distToPrep = Math.hypot(prepX - bot.x, prepY - bot.y);
+            if (distToPrep > 35) {
+              // Traverse behind puck first to set up alignment
+              targetX = prepX + aiOffsetX;
+              targetY = prepY + aiOffsetY;
+            } else {
+              // Align finished - thrust forward with full strike velocity past puck
+              targetX = delayedPuck.x - uX * 22;
+              targetY = delayedPuck.y - uY * 22;
+            }
           }
         } else {
-          // ATTACK MODE: AI in position behind puck. Set up and execute a dynamic strike!
-          const targetGoalX = 375 + aiOffsetX * 3; // Aim with randomized error offsets
-          const targetGoalY = arenaHeight;
+          // DEFENSE MODE: Puck on player's side or fleeing
+          // Shadow the puck's perceived location to cover goal angles from distance
+          targetX = arenaWidth / 2 + (perceivedPuck.x + aiOffsetX - arenaWidth / 2) * 0.45;
+          targetY = 135 + aiOffsetY * 0.4;
+        }
 
-          const dirX = delayedPuck.x - targetGoalX;
-          const dirY = delayedPuck.y - targetGoalY;
-          const distGoal = Math.hypot(dirX, dirY) || 1;
-          const uX = dirX / distGoal;
-          const uY = dirY / distGoal;
+        // 2. Smooth Kinematic Motion Execution (Strictly bounded by botMaxSpeed, preventing any frame rate teleportation)
+        const dX = targetX - bot.x;
+        const dY = targetY - bot.y;
+        const dist = Math.hypot(dX, dY);
 
-          // Target a position behind the puck aligned with player's goal
-          const prepX = delayedPuck.x + uX * (paddleRadius + puckRadius + 15);
-          const prepY = delayedPuck.y + uY * (paddleRadius + puckRadius + 15);
+        if (dist > 1) {
+          const interpK = aiDifficulty === 'easy' ? 0.08 : aiDifficulty === 'medium' ? 0.16 : 0.40;
+          let stepX = dX * interpK;
+          let stepY = dY * interpK;
 
-          const distToPrep = Math.hypot(prepX - bot.x, prepY - bot.y);
-          if (distToPrep > 35) {
-            // Traverse behind puck first to set up alignment
-            targetX = prepX + aiOffsetX;
-            targetY = prepY + aiOffsetY;
-          } else {
-            // Align finished - thrust forward with full strike velocity past puck
-            targetX = delayedPuck.x - uX * 22;
-            targetY = delayedPuck.y - uY * 22;
+          // Force rigorous capping under maximum speed threshold to eliminate quantum tunneling/teleportation
+          const stepDist = Math.hypot(stepX, stepY);
+          if (stepDist > botMaxSpeed) {
+            stepX = (stepX / stepDist) * botMaxSpeed;
+            stepY = (stepY / stepDist) * botMaxSpeed;
           }
-        }
-      } else {
-        // DEFENSE MODE: Puck on player's side or fleeing
-        // Shadow the puck's perceived location to cover goal angles from distance
-        targetX = arenaWidth / 2 + (perceivedPuck.x + aiOffsetX - arenaWidth / 2) * 0.45;
-        targetY = 135 + aiOffsetY * 0.4;
-      }
 
-      // 2. Smooth Kinematic Motion Execution (Strictly bounded by botMaxSpeed, preventing any frame rate teleportation)
-      const dX = targetX - bot.x;
-      const dY = targetY - bot.y;
-      const dist = Math.hypot(dX, dY);
-
-      if (dist > 1) {
-        const interpK = aiDifficulty === 'easy' ? 0.08 : aiDifficulty === 'medium' ? 0.16 : 0.40;
-        let stepX = dX * interpK;
-        let stepY = dY * interpK;
-
-        // Force rigorous capping under maximum speed threshold to eliminate quantum tunneling/teleportation
-        const stepDist = Math.hypot(stepX, stepY);
-        if (stepDist > botMaxSpeed) {
-          stepX = (stepX / stepDist) * botMaxSpeed;
-          stepY = (stepY / stepDist) * botMaxSpeed;
+          bot.x += stepX;
+          bot.y += stepY;
         }
 
-        bot.x += stepX;
-        bot.y += stepY;
+        // Clamp inside opponent's half of the arena
+        bot.x = Math.max(paddleRadius + 12, Math.min(arenaWidth - paddleRadius - 12, bot.x));
+        bot.y = Math.max(paddleRadius + 12, Math.min(arenaHeight / 2 - paddleRadius - 5, bot.y));
       }
-
-      // Clamp inside opponent's half of the arena
-      bot.x = Math.max(paddleRadius + 12, Math.min(arenaWidth - paddleRadius - 12, bot.x));
-      bot.y = Math.max(paddleRadius + 12, Math.min(arenaHeight / 2 - paddleRadius - 5, bot.y));
 
       // Calculate instantaneous paddle velocities (distance moved between last frame and current frame)
       const playerPaddleVelX = playerPaddle.current.x - lastPlayerPaddlePos.current.x;
@@ -1384,9 +1614,12 @@ export default function AirHockeyGame({
           if (puck.x >= goalMinX && puck.x <= goalMaxX) {
             // Puck enters/crosses the P1 top goal area
             if (puck.y < -puckRadius) {
-              scoreRef.current.self += 1;
-              synthInstance.playScore();
-              checkAndAwardMatchProgress();
+              if (!isScoringRef.current) {
+                isScoringRef.current = true;
+                scoreRef.current.self += 1;
+                synthInstance.playScore();
+                checkAndAwardMatchProgress('player', Math.hypot(vel.x, vel.y));
+              }
               break; // break the sub-step physics simulation for reset
             }
           } else {
@@ -1403,9 +1636,12 @@ export default function AirHockeyGame({
           if (puck.x >= goalMinX && puck.x <= goalMaxX) {
             // Puck enters/crosses bottom goal
             if (puck.y > arenaHeight + puckRadius) {
-              scoreRef.current.opponent += 1;
-              synthInstance.playScore();
-              checkAndAwardMatchProgress();
+              if (!isScoringRef.current) {
+                isScoringRef.current = true;
+                scoreRef.current.opponent += 1;
+                synthInstance.playScore();
+                checkAndAwardMatchProgress('ai', Math.hypot(vel.x, vel.y));
+              }
               break; // break physics simulation for reset
             }
           } else {
@@ -1543,37 +1779,32 @@ export default function AirHockeyGame({
       // Commit previous coordinates for tracking the next frame's paddle velocities
       lastPlayerPaddlePos.current = { x: playerPaddle.current.x, y: playerPaddle.current.y };
       lastOpponentPaddlePos.current = { x: opponentPaddle.current.x, y: opponentPaddle.current.y };
-    };
 
-    // Match End Handler for AI Mode
-    const checkAndAwardMatchProgress = () => {
-      const selfScore = scoreRef.current.self;
-      const oppScore = scoreRef.current.opponent;
-      const targetFinish = 5;
-
-      if (selfScore >= targetFinish || oppScore >= targetFinish) {
-        const isWin = selfScore >= targetFinish;
-        
-        setEndSummary({
-          win: isWin,
-          scoreSelf: selfScore,
-          scoreOpponent: oppScore
-        });
-        setGameState('gameover');
-        synthInstance.playGameOver(isWin);
-        onGameCompleted(isWin, selfScore, oppScore);
-      } else {
-        // Reset puck on goal scored
-        puckPos.current = { x: 375, y: 500 };
-        puckVel.current = {
-          x: (Math.random() > 0.5 ? 2.5 : -2.5) + (Math.random() - 0.5),
-          y: (Math.random() > 0.5 ? 4 : -4) + (Math.random() - 0.5)
-        };
+      // Under Host Authority, Player 1 (creator) continuously streams paddle, scores, and calculated puck physics to server
+      if (gameMode === 'multiplayer' && wsRef.current && wsRef.current.readyState === WebSocket.OPEN && currentRoom && role === 'p1') {
+        wsRef.current.send(JSON.stringify({
+          type: 'move_paddle',
+          gameId: currentRoom.id,
+          role: 'p1',
+          x: playerPaddle.current.x,
+          y: playerPaddle.current.y,
+          puck: {
+            pos: puckPos.current,
+            vel: puckVel.current
+          },
+          scores: {
+            p1: scoreRef.current.self,
+            p2: scoreRef.current.opponent
+          }
+        }));
       }
     };
 
     // RENDER CANVAS GRAPHICS
     const drawCanvas = () => {
+      // Clear canvas drawing buffer to prevent GPU/CPU leaks & overheating
+      ctx.clearRect(0, 0, arenaWidth, arenaHeight);
+      
       // Clear with dark ambient space backdrop
       ctx.fillStyle = '#060609';
       ctx.fillRect(0, 0, arenaWidth, arenaHeight);
@@ -1831,8 +2062,13 @@ export default function AirHockeyGame({
 
     // Primary Game Loop ticks
     const loop = () => {
-      updatePhysics();
-      drawCanvas();
+      if (isDialogueOpenRef.current) {
+        // Paused on Dialogue - do not update physics, but keep drawing canvas so it remains responsive
+        drawCanvas();
+      } else {
+        updatePhysics();
+        drawCanvas();
+      }
       animId = requestAnimationFrame(loop);
     };
 
@@ -2345,19 +2581,111 @@ export default function AirHockeyGame({
         )}
 
         {gameState === 'playing' && (
-          <canvas
-            ref={canvasRef}
-            width={arenaWidth}
-            height={arenaHeight}
-            className="block max-w-full bg-black cursor-crosshair rounded"
-            id="air-hockey-arena-canvas"
-          />
+          <div className="relative">
+            {/* E-Sports Strict Match Timer Display */}
+            <div className="absolute top-4 left-1/2 transform -translate-x-1/2 bg-black/85 backdrop-blur-md border border-fuchsia-500/25 px-4 py-1.5 rounded-full z-10 flex items-center justify-center gap-2 pointer-events-none shadow-[0_0_15px_rgba(236,72,153,0.25)] select-none">
+              <span className="w-2 h-2 rounded-full bg-fuchsia-500 animate-pulse"></span>
+              <span className="font-mono text-[9px] text-fuchsia-400 font-bold uppercase tracking-widest">
+                TIME LIMIT:
+              </span>
+              <span className="font-mono text-xs text-white font-bold tracking-wider">
+                {Math.floor(timeLeft / 60)}:{(timeLeft % 60).toString().padStart(2, '0')}
+              </span>
+            </div>
+
+            {/* Interactive Neon-Matrix AI Dialogue Overlay Modal */}
+            {isDialogueOpen && (
+              <div className="absolute inset-0 bg-black/80 backdrop-blur-[6px] z-20 flex items-center justify-center p-4">
+                <div className="w-full max-w-sm bg-neutral-950 border border-fuchsia-500/30 rounded p-5 shadow-[0_0_20px_rgba(236,72,153,0.3)] text-left">
+                  {/* Neon Matrix Transmission Header */}
+                  <div className="flex items-center gap-2 border-b border-fuchsia-500/10 pb-2 mb-3">
+                    <div className="w-2 h-2 rounded-full bg-fuchsia-500 animate-pulse"></div>
+                    <span className="font-mono text-[8px] uppercase tracking-widest text-fuchsia-400 font-semibold">
+                      MATRIX CHAT TRANCH // PHASE {dialoguePhase}
+                    </span>
+                  </div>
+
+                  {/* Opponent cognitive identifier */}
+                  <div className="mb-3">
+                    <span className="font-mono text-[8px] uppercase tracking-widest text-[#00ff66] bg-[#00ff66]/10 px-2 py-0.5 rounded">
+                      SYSTEM OPPONENT ACTIVE
+                    </span>
+                  </div>
+
+                  {/* Character Monologue Bubbles */}
+                  <div className="bg-black/90 border border-fuchsia-500/15 rounded p-3 mb-3 min-h-[75px] flex items-center">
+                    {isAiLoading ? (
+                      <div className="flex flex-col items-center justify-center w-full gap-2">
+                        <div className="w-4 h-4 border border-fuchsia-500 border-t-transparent rounded-full animate-spin"></div>
+                        <span className="font-mono text-[7px] text-fuchsia-400/50 uppercase tracking-widest">
+                          Incoming matrix dialect...
+                        </span>
+                      </div>
+                    ) : (
+                      <p className="font-mono text-xs text-neutral-200 leading-relaxed">
+                        {dialogueText}
+                      </p>
+                    )}
+                  </div>
+
+                  {/* Reaction Phase Options */}
+                  {dialoguePhase === 1 && (
+                    <div className="flex flex-col gap-1.5">
+                      <p className="font-mono text-[8px] text-neutral-400 uppercase tracking-wide">
+                        Draft your mental pressure bypass:
+                      </p>
+                      <input
+                        type="text"
+                        value={playerReplyInput}
+                        onChange={(e) => setPlayerReplyInput(e.target.value)}
+                        placeholder="Type reply... (e.g. 'Lucky shot!', 'I will win!')"
+                        disabled={isAiLoading}
+                        className="w-full bg-black border border-fuchsia-500/25 rounded px-2.5 py-1.5 text-neutral-200 font-mono text-[10px] focus:outline-none focus:border-fuchsia-400 focus:shadow-[0_0_8px_rgba(236,72,153,0.3)] transition-all"
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' && playerReplyInput.trim() && !isAiLoading) {
+                            handleSendPlayerReply();
+                          }
+                        }}
+                      />
+                      <button
+                        onClick={handleSendPlayerReply}
+                        disabled={!playerReplyInput.trim() || isAiLoading}
+                        className="mt-1 w-full py-1.5 bg-fuchsia-500/10 hover:bg-fuchsia-500 text-fuchsia-400 hover:text-white border border-fuchsia-500/40 rounded font-mono text-[10px] uppercase font-bold tracking-wider transition-all cursor-pointer disabled:opacity-40"
+                      >
+                        Send Transmission
+                      </button>
+                    </div>
+                  )}
+
+                  {dialoguePhase === 3 && (
+                    <button
+                      onClick={handleResumeGameAndCloseDialogue}
+                      disabled={isAiLoading}
+                      className="w-full py-1.5 bg-[#00ff66]/10 hover:bg-[#00ff66] text-[#00ff66] hover:text-black border border-[#00ff66]/40 rounded font-mono text-[10px] uppercase font-bold tracking-wider transition-all cursor-pointer"
+                    >
+                      Bypass Matrix & Resume
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
+
+            <canvas
+              ref={canvasRef}
+              width={arenaWidth}
+              height={arenaHeight}
+              className="block max-w-full bg-black cursor-crosshair rounded"
+              id="air-hockey-arena-canvas"
+            />
+          </div>
         )}
 
         {gameState === 'gameover' && endSummary && (
           <div className="absolute inset-0 bg-black/95 backdrop-blur-md z-10 flex flex-col items-center justify-start py-8 px-4 text-center animate-fade-in overflow-y-auto max-h-full" id="game-over-modal-view">
             <div className={`w-16 h-16 rounded-full border flex items-center justify-center shadow-lg mb-4 ${
-              endSummary.win 
+              endSummary.isDraw
+                ? 'bg-black border-yellow-500/50 text-yellow-500 shadow-[0_0_20px_rgba(234,179,8,0.25)]'
+                : endSummary.win 
                 ? 'bg-black border-[#00FF41]/50 text-[#00FF41] shadow-[0_0_20px_rgba(0,255,65,0.25)]' 
                 : 'bg-black border-red-500/50 text-red-500 shadow-[0_0_20px_rgba(239,68,68,0.2)]'
             }`}>
@@ -2368,7 +2696,11 @@ export default function AirHockeyGame({
               Battle Synapses Finished
             </span>
             <h2 className="font-sans font-bold text-3xl uppercase tracking-tighter" id="game-over-match-status-title">
-              {endSummary.win ? (
+              {endSummary.isDraw ? (
+                <span className="text-yellow-400 font-extrabold text-shadow">
+                  Match Drawn!
+                </span>
+              ) : endSummary.win ? (
                 <span className="neon-text-green drop-shadow font-extrabold text-shadow">
                   Victory Achieved!
                 </span>
