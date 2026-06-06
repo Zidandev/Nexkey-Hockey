@@ -1029,7 +1029,7 @@ Acknowledge and answer their reply in our gaming persona. Conclude this brief ch
     });
     app.use(vite.middlewares);
   } else {
-    const distPath = path.join(process.cwd(), 'dist');
+    const distPath = path.join(process.cwd(), 'laravel', 'public');
     app.use(express.static(distPath));
     app.get('*', (req, res) => {
       res.sendFile(path.join(distPath, 'index.html'));
