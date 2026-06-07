@@ -57,7 +57,7 @@ class GeminiController extends Controller
                 ]);
             }
 
-            $modelName = 'gemini-2.5-flash';
+            $modelName = 'gemini-3.5-flash';
             $url = "https://generativelanguage.googleapis.com/v1beta/models/{$modelName}:generateContent?key={$apiKey}";
 
             $systemPrompt = '';
