@@ -330,42 +330,87 @@ async function startServer() {
   }
 
   app.post('/api/gemini/dialogue', async (req, res) => {
+    const getDynamicDialogueFallback = (lang: 'en' | 'id', scorer: 'player' | 'ai', velocity: number, phaseNum: number): string => {
+      if (lang === 'en') {
+        if (phaseNum === 1) {
+          if (scorer === 'player') {
+            if (velocity > 15) {
+              const arr = [
+                "Whoa! That was insanely fast! Mind slowing down a bit?!",
+                "Ouch! What a rocket of a shot! My robotic arms almost broke!",
+                "Calm down, speedster! No need to play like your life is on the line!"
+              ];
+              return arr[Math.floor(Math.random() * arr.length)];
+            } else {
+              const arr = [
+                "Seriously? Such a slow camper goal. Show some real skill!",
+                "A turtle goal! You really just waited there, didn't you?",
+                "Cheap defensive goal. Score a real one next time!"
+              ];
+              return arr[Math.floor(Math.random() * arr.length)];
+            }
+          } else {
+            const arr = [
+              "BOOM! Easiest goal of my life! Upgrade your defense, human!",
+              "Haha! Too slow! Did you even see that puck pass by?!",
+              "Score for the machine! You cannot match my calculations!"
+            ];
+            return arr[Math.floor(Math.random() * arr.length)];
+          }
+        } else {
+          const arr = [
+            "Keep talking, human! Let's see if you can back that up!",
+            "Excuses, excuses! Show me what you've got on the table!",
+            "Aha, cheeky response. Let's get back to the duel!"
+          ];
+          return arr[Math.floor(Math.random() * arr.length)];
+        }
+      } else {
+        if (phaseNum === 1) {
+          if (scorer === 'player') {
+            if (velocity > 15) {
+              const arr = [
+                "Gokil! Kenceng bgt speed-nya! Pelan-pelan dong cuy!",
+                "Anjay peluru apa itu?! Tangan besi gua ampir copot!",
+                "Waduh ngebut bray! Jangan nge-cheat kecepatan dong!"
+              ];
+              return arr[Math.floor(Math.random() * arr.length)];
+            } else {
+              const arr = [
+                "Alah camper, beraninya nunggu pusing gitu doang!",
+                "Lemot amat itu koin! Kayak kura-kura ompong!",
+                "Hoki doang lu nungguin di pojokan! Tanding jantan dong!"
+              ];
+              return arr[Math.floor(Math.random() * arr.length)];
+            }
+          } else {
+            const arr = [
+              "BOOM! Masuk jagoan! Pertahanan lu busuk amat cuy, noob!",
+              "Hahaha kena mental gak tuh? Senggol dong bos!",
+              "EZ PZ! Gerakan lambat gitu mana bisa nahan pukulan gua!"
+            ];
+            return arr[Math.floor(Math.random() * arr.length)];
+          }
+        } else {
+          const arr = [
+            "Alah bacot lu! Sini buktiin di dalam lapangan!",
+            "Banyak alesan bocil! Sikat lagi kuatkan mental lu!",
+            "Halah hoki doang! Ayo buruan mabar lagi!"
+          ];
+          return arr[Math.floor(Math.random() * arr.length)];
+        }
+      }
+    };
+
     try {
       const { scorer, puckVelocity, priorAiMessage, playerReply, phase, language } = req.body;
       const apiKey = process.env.GEMINI_API_KEY;
       const lang = language === 'id' ? 'id' : 'en';
 
+      const parsedVelocity = parseFloat(puckVelocity || 0);
+
       if (!apiKey) {
-        // Fallback characters answers if Gemini key is not configured
-        let fallback = '';
-        if (lang === 'en') {
-          fallback = 'Let\'s play again!';
-          if (phase === 1) {
-            if (scorer === 'player') {
-              fallback = puckVelocity > 15 
-                ? 'Terrifying hit, please slow down!' 
-                : 'What a camper, only waiting for coward goals!';
-            } else {
-              fallback = 'Haha in! Upgrade your skills first!';
-            }
-          } else {
-            fallback = 'Too many excuses, let\'s duel again!';
-          }
-        } else {
-          fallback = 'Ayo main lagi!';
-          if (phase === 1) {
-            if (scorer === 'player') {
-              fallback = puckVelocity > 15 
-                ? 'Ngeri bgt bray, pelan-pelan dong pliss!' 
-                : 'Alah camper, beraninya nunggu gol pengecut!';
-            } else {
-              fallback = 'Hahaha masuk! Makanya naikin dulu skill lu!';
-            }
-          } else {
-            fallback = 'Halah banyak alesan, ayo tanding lagi!';
-          }
-        }
-        return res.json({ success: true, text: fallback });
+        return res.json({ success: true, text: getDynamicDialogueFallback(lang, scorer, parsedVelocity, phase) });
       }
 
       const client = getGeminiClient();
@@ -387,11 +432,11 @@ Jaga agar tanggapan Anda sangat singkat (di bawah 15 kata) dan sangat pukau/lucu
 
       if (phase === 1) {
         if (scorer === 'player') {
-          if (puckVelocity > 15) {
-            userPrompt = `The player just scored a goal with a furious, incredibly high speed strike (velocity: ${parseFloat(puckVelocity).toFixed(1)} px/frame).
+          if (parsedVelocity > 15) {
+            userPrompt = `The player just scored a goal with a furious, incredibly high speed strike (velocity: ${parsedVelocity.toFixed(1)} px/frame).
 You are terrified, deeply shaken, and plead for them to calm down or show mercy. Keep it fun and dramatic. Mention their aggressive hit.`;
           } else {
-            userPrompt = `The player scored with a slow, careful, passive, defensive strike (velocity: ${parseFloat(puckVelocity).toFixed(1)} px/frame).
+            userPrompt = `The player scored with a slow, careful, passive, defensive strike (velocity: ${parsedVelocity.toFixed(1)} px/frame).
 You are annoyed, teasing, and mock them as a fearful camper who only waits and scores cowards' goals.`;
           }
         } else {
@@ -413,14 +458,14 @@ Acknowledge and answer their reply in our gaming persona. Conclude this brief ch
         }
       });
 
-      const replyText = response.text?.trim() || 'Ayo lanjut!';
+      const replyText = response.text?.trim() || getDynamicDialogueFallback(lang, scorer, parsedVelocity, phase);
       res.json({ success: true, text: replyText });
     } catch (err: any) {
       console.error('Gemini Dialogue Generation error:', err);
       const isIndo = req.body?.language === 'id' || !req.body?.language;
-      const fallbackMsg = isIndo 
-        ? `Ayo buruan mulai lagi, berisik! (Error: ${err.message})`
-        : `Come on, let's start over, noisy! (Error: ${err.message})`;
+      const lang = isIndo ? 'id' : 'en';
+      const parsedVelocity = parseFloat(req.body?.puckVelocity || 0);
+      const fallbackMsg = getDynamicDialogueFallback(lang, req.body?.scorer || 'player', parsedVelocity, req.body?.phase || 1);
       res.json({ success: true, text: fallbackMsg });
     }
   });

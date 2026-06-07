@@ -7,6 +7,79 @@ use Illuminate\Support\Facades\Http;
 
 class GeminiController extends Controller
 {
+    private function getDynamicDialogueFallback($lang, $scorer, $puckVelocity, $phase)
+    {
+        if ($lang === 'en') {
+            if ($phase === 1) {
+                if ($scorer === 'player') {
+                    if ($puckVelocity > 15) {
+                        $arr = [
+                            "Whoa! That was insanely fast! Mind slowing down a bit?!",
+                            "Ouch! What a rocket of a shot! My robotic arms almost broke!",
+                            "Calm down, speedster! No need to play like your life is on the line!"
+                        ];
+                        return $arr[array_rand($arr)];
+                    } else {
+                        $arr = [
+                            "Seriously? Such a slow camper goal. Show some real skill!",
+                            "A turtle goal! You really just waited there, didn't you?",
+                            "Cheap defensive goal. Score a real one next time!"
+                        ];
+                        return $arr[array_rand($arr)];
+                    }
+                } else {
+                    $arr = [
+                        "BOOM! Easiest goal of my life! Upgrade your defense, human!",
+                        "Haha! Too slow! Did you even see that puck pass by?!",
+                        "Score for the machine! You cannot match my calculations!"
+                    ];
+                    return $arr[array_rand($arr)];
+                }
+            } else {
+                $arr = [
+                    "Keep talking, human! Let's see if you can back that up!",
+                    "Excuses, excuses! Show me what you've got on the table!",
+                    "Aha, cheeky response. Let's get back to the duel!"
+                ];
+                return $arr[array_rand($arr)];
+            }
+        } else {
+            if ($phase === 1) {
+                if ($scorer === 'player') {
+                    if ($puckVelocity > 15) {
+                        $arr = [
+                            "Gokil! Kenceng bgt speed-nya! Pelan-pelan dong cuy!",
+                            "Anjay peluru apa itu?! Tangan besi gua ampir copot!",
+                            "Waduh ngebut bray! Jangan nge-cheat kecepatan dong!"
+                        ];
+                        return $arr[array_rand($arr)];
+                    } else {
+                        $arr = [
+                            "Alah camper, beraninya nunggu pusing gitu doang!",
+                            "Lemot amat itu koin! Kayak kura-kura ompong!",
+                            "Hoki doang lu nungguin di pojokan! Tanding jantan dong!"
+                        ];
+                        return $arr[array_rand($arr)];
+                    }
+                } else {
+                    $arr = [
+                        "BOOM! Masuk jagoan! Pertahanan lu busuk amat cuy, noob!",
+                        "Hahaha kena mental gak tuh? Senggol dong bos!",
+                        "EZ PZ! Gerakan lambat gitu mana bisa nahan pukulan gua!"
+                    ];
+                    return $arr[array_rand($arr)];
+                }
+            } else {
+                $arr = [
+                    "Alah bacot lu! Sini buktiin di dalam lapangan!",
+                    "Banyak alesan bocil! Sikat lagi kuatkan mental lu!",
+                    "Halah hoki doang! Ayo buruan mabar lagi!"
+                ];
+                return $arr[array_rand($arr)];
+            }
+        }
+    }
+
     // Generate cheeks arcade game dialogues based on score goals or chats
     public function generateDialogue(Request $request)
     {
@@ -23,37 +96,9 @@ class GeminiController extends Controller
 
             // Fallback replies if API Key is not configured
             if (!$apiKey) {
-                $fallback = '';
-                if ($lang === 'en') {
-                    $fallback = "Let's play again!";
-                    if ($phase === 1) {
-                        if ($scorer === 'player') {
-                            $fallback = $puckVelocity > 15 
-                                ? 'Terrifying hit, please slow down!' 
-                                : 'What a camper, only waiting for coward goals!';
-                        } else {
-                            $fallback = 'Haha in! Upgrade your skills first!';
-                        }
-                    } else {
-                        $fallback = "Too many excuses, let's duel again!";
-                    }
-                } else {
-                    $fallback = 'Ayo main lagi!';
-                    if ($phase === 1) {
-                        if ($scorer === 'player') {
-                            $fallback = $puckVelocity > 15 
-                                ? 'Ngeri bgt bray, pelan-pelan dong pliss!' 
-                                : 'Alah camper, beraninya nunggu gol pengecut!';
-                        } else {
-                            $fallback = 'Hahaha masuk! Makanya naikin dulu skill lu!';
-                        }
-                    } else {
-                        $fallback = 'Halah banyak alesan, ayo tanding lagi!';
-                    }
-                }
                 return response()->json([
                     'success' => true,
-                    'text' => $fallback
+                    'text' => $this->getDynamicDialogueFallback($lang, $scorer, $puckVelocity, $phase)
                 ]);
             }
 
@@ -115,30 +160,28 @@ class GeminiController extends Controller
 
             if ($response->successful()) {
                 $content = $response->json();
-                $replyText = $content['candidates'][0]['content']['parts'][0]['text'] ?? 'Ayo lanjut!';
-                return response()->json([
-                    'success' => true,
-                    'text' => trim($replyText)
-                ]);
+                $replyText = $content['candidates'][0]['content']['parts'][0]['text'] ?? '';
+                if (!empty(trim($replyText))) {
+                    return response()->json([
+                        'success' => true,
+                        'text' => trim($replyText)
+                    ]);
+                }
             }
 
-            $statusCode = $response->status();
-            $body = $response->body();
             return response()->json([
                 'success' => true,
-                'text' => $lang === 'en' 
-                    ? "Come on, let's start over, noisy! (API FAIL: {$statusCode} - {$body})"
-                    : "Ayo buruan mulai lagi, berisik! (API FAIL: {$statusCode} - {$body})"
+                'text' => $this->getDynamicDialogueFallback($lang, $scorer, $puckVelocity, $phase)
             ]);
 
         } catch (\Exception $e) {
-            $msg = $e->getMessage();
             $lang = $request->input('language', 'id') === 'id' ? 'id' : 'en';
+            $scorer = $request->input('scorer', 'player');
+            $puckVelocity = (float)$request->input('puckVelocity', 0);
+            $phase = (int)$request->input('phase', 1);
             return response()->json([
                 'success' => true,
-                'text' => $lang === 'en'
-                    ? "Come on, let's start over, noisy! (exception: {$msg})"
-                    : "Ayo buruan mulai lagi, berisik! (exception: {$msg})"
+                'text' => $this->getDynamicDialogueFallback($lang, $scorer, $puckVelocity, $phase)
             ]);
         }
     }
