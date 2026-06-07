@@ -27,9 +27,13 @@ export default function ProfileView({ user, stats, history, onBack, onProfileUpd
   const [isSaving, setIsSaving] = useState(false);
 
   // Format dates helper
-  const formatDate = (isoString: string) => {
+  const formatDate = (isoString?: string) => {
     try {
+      if (!isoString) return 'Recent';
       const date = new Date(isoString);
+      if (isNaN(date.getTime())) {
+        return 'Recent';
+      }
       return date.toLocaleDateString(undefined, {
         month: 'short',
         day: 'numeric',

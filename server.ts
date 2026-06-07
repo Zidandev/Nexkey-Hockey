@@ -21,6 +21,51 @@ async function startServer() {
 
   app.use(express.json());
 
+  // --- INTEGRATED LOCAL LARAVEL DB SYNCHRONIZER ---
+  // Automatically replicates actions like match logs, coin changes, level-ups, etc. 
+  // to local PHP phpMyAdmin MySQL database if php artisan serve is running on port 8000.
+  async function syncLocalLaravelAction(expressUserId: string, endpoint: string, data: any) {
+    try {
+      const dbUser = db.getUserById(expressUserId);
+      if (!dbUser) return;
+
+      const authUrl = 'http://127.0.0.1:8000/api/auth/register';
+      const authRes = await fetch(authUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json'
+        },
+        body: JSON.stringify({
+          username: dbUser.username || 'NeonRider',
+          email: dbUser.email || `${dbUser.username.toLowerCase()}@nexkey.dev`
+        })
+      });
+
+      if (!authRes.ok) return;
+
+      const authData = await authRes.json() as any;
+      if (!authData || !authData.success || !authData.user || !authData.user.id) return;
+
+      const laravelUserId = authData.user.id;
+      const finalEndpoint = endpoint.replace(':id', String(laravelUserId));
+      const syncUrl = `http://127.0.0.1:8000/api${finalEndpoint}`;
+
+      const syncData = { ...data, userId: laravelUserId };
+
+      await fetch(syncUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json'
+        },
+        body: JSON.stringify(syncData)
+      });
+    } catch (e) {
+      // Safely absorb exception if Laravel (port 8000) local database server is offline
+    }
+  }
+
   // ==========================================
   // HTTP API ENDPOINTS
   // ==========================================
@@ -95,6 +140,11 @@ async function startServer() {
       if (!updated) {
         return res.status(500).json({ success: false, error: 'Failed compiling user updates' });
       }
+
+      // Sync profile metadata modifications to Laravel phpMyAdmin
+      setTimeout(() => {
+        syncLocalLaravelAction(id, '/users/:id/profile', { username: username.trim(), bio: bio !== undefined ? bio.trim() : user.bio, avatarUrl: avatarUrl !== undefined ? avatarUrl.trim() : user.avatarUrl });
+      }, 50);
 
       res.json({
         success: true,
@@ -215,6 +265,11 @@ async function startServer() {
         avatarUrl: user.avatarUrl || `https://api.dicebear.com/7.x/bottts-neutral/svg?seed=${cleanUsername}`
       });
 
+      // Sync onboarding Username setting to Laravel phpMyAdmin
+      setTimeout(() => {
+        syncLocalLaravelAction(userId, '/users/:id/profile', { username: cleanUsername });
+      }, 50);
+
       res.json({
         success: true,
         user: updated,
@@ -248,6 +303,11 @@ async function startServer() {
         return res.status(400).json(result);
       }
 
+      // Sync skin purchase to Laravel phpMyAdmin
+      setTimeout(() => {
+        syncLocalLaravelAction(userId, '/shop/purchase', { itemId });
+      }, 50);
+
       res.json({
         success: true,
         user: db.getUserById(userId),
@@ -270,6 +330,11 @@ async function startServer() {
       if (!result.success) {
         return res.status(400).json(result);
       }
+
+      // Sync skin equip to Laravel phpMyAdmin
+      setTimeout(() => {
+        syncLocalLaravelAction(userId, '/shop/equip', { itemId });
+      }, 50);
 
       res.json({
         success: true,
@@ -297,6 +362,19 @@ async function startServer() {
         expEarned,
         currencyEarned
       });
+
+      // Sync gameplay match outcomes to Laravel phpMyAdmin
+      setTimeout(() => {
+        syncLocalLaravelAction(userId, '/match/add', {
+          opponentName,
+          mode,
+          playerRank,
+          scoreSelf,
+          scoreOpponent,
+          expEarned,
+          currencyEarned
+        });
+      }, 50);
 
       res.json({
         success: true,

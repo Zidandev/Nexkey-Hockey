@@ -37,13 +37,13 @@ class RoomController extends Controller
                 ];
             });
 
-            return response()->json([
+            return $this->jsonResponse([
                 'success' => true,
                 'rooms' => $roomsWithUsernames
             ]);
 
         } catch (\Exception $e) {
-            return response()->json([
+            return $this->jsonResponse([
                 'success' => false,
                 'error' => $e->getMessage()
             ], 500);
@@ -71,7 +71,7 @@ class RoomController extends Controller
             // Conflict check
             $existing = LobbyRoom::where('room_name', $roomName)->where('status', '!=', 'finished')->first();
             if ($existing) {
-                return response()->json([
+                return $this->jsonResponse([
                     'success' => false,
                     'error' => 'Nama room sudah terpakai!'
                 ], 400);
@@ -90,13 +90,13 @@ class RoomController extends Controller
                 'board_skin' => $boardSkin
             ]);
 
-            return response()->json([
+            return $this->jsonResponse([
                 'success' => true,
                 'room' => $room
             ], 201);
 
         } catch (\Exception $e) {
-            return response()->json([
+            return $this->jsonResponse([
                 'success' => false,
                 'error' => $e->getMessage()
             ], 500);
@@ -119,14 +119,14 @@ class RoomController extends Controller
 
             $room = LobbyRoom::where('room_name', $roomName)->where('status', '!=', 'finished')->first();
             if (!$room) {
-                return response()->json([
+                return $this->jsonResponse([
                     'success' => false,
                     'error' => 'Room tidak ditemukan!'
                 ], 404);
             }
 
             if ($room->status === 'playing' || $room->status === 'finished' || ($room->player2_id && $room->player1_id != $userId && $room->player2_id != $userId)) {
-                return response()->json([
+                return $this->jsonResponse([
                     'success' => false,
                     'error' => 'Ruangan sudah penuh atau sedang bermain!'
                 ], 400);
@@ -134,7 +134,7 @@ class RoomController extends Controller
 
             if ($room->player1_id != $userId) {
                 if ($room->is_private && $room->password && $room->password !== $password) {
-                    return response()->json([
+                    return $this->jsonResponse([
                         'success' => false,
                         'error' => 'Password salah!'
                     ], 400);
@@ -146,13 +146,13 @@ class RoomController extends Controller
                 ]);
             }
 
-            return response()->json([
+            return $this->jsonResponse([
                 'success' => true,
                 'room' => $room
             ]);
 
         } catch (\Exception $e) {
-            return response()->json([
+            return $this->jsonResponse([
                 'success' => false,
                 'error' => $e->getMessage()
             ], 500);
@@ -182,7 +182,7 @@ class RoomController extends Controller
                     'player2_id' => $userId,
                     'status' => 'full'
                 ]);
-                return response()->json([
+                return $this->jsonResponse([
                     'success' => true,
                     'room' => $openRoom,
                     'role' => 'p2'
@@ -203,14 +203,14 @@ class RoomController extends Controller
                 'board_skin' => $boardSkin
             ]);
 
-            return response()->json([
+            return $this->jsonResponse([
                 'success' => true,
                 'room' => $room,
                 'role' => 'p1'
             ]);
 
         } catch (\Exception $e) {
-            return response()->json([
+            return $this->jsonResponse([
                 'success' => false,
                 'error' => $e->getMessage()
             ], 500);

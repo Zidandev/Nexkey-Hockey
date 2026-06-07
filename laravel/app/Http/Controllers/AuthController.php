@@ -16,12 +16,12 @@ class AuthController extends Controller
     {
         try {
             $users = User::all();
-            return response()->json([
+            return $this->jsonResponse([
                 'success' => true,
                 'users' => $users
             ]);
         } catch (\Exception $e) {
-            return response()->json([
+            return $this->jsonResponse([
                 'success' => false,
                 'error' => $e->getMessage()
             ], 500);
@@ -42,7 +42,7 @@ class AuthController extends Controller
 
             $existing = User::where('username', $username)->first();
             if ($existing) {
-                return response()->json([
+                return $this->jsonResponse([
                     'success' => true,
                     'user' => $existing,
                     'message' => 'Welcome back!'
@@ -81,14 +81,14 @@ class AuthController extends Controller
                 return $u;
             });
 
-            return response()->json([
+            return $this->jsonResponse([
                 'success' => true,
                 'user' => $user,
                 'message' => 'Account created!'
             ], 201);
 
         } catch (\Exception $e) {
-            return response()->json([
+            return $this->jsonResponse([
                 'success' => false,
                 'error' => $e->getMessage()
             ], 500);
@@ -109,7 +109,7 @@ class AuthController extends Controller
 
             $existing = User::where('email', $email)->first();
             if ($existing) {
-                return response()->json([
+                return $this->jsonResponse([
                     'success' => false,
                     'error' => 'Email address already mapped to an active synapse.'
                 ], 400);
@@ -146,14 +146,14 @@ class AuthController extends Controller
                 return $u;
             });
 
-            return response()->json([
+            return $this->jsonResponse([
                 'success' => true,
                 'user' => $user,
                 'message' => 'Synapse account initiated. Enforcing username verification.'
             ], 201);
 
         } catch (\Exception $e) {
-            return response()->json([
+            return $this->jsonResponse([
                 'success' => false,
                 'error' => $e->getMessage()
             ], 500);
@@ -174,7 +174,7 @@ class AuthController extends Controller
 
             $user = User::where('email', $email)->first();
             if (!$user) {
-                return response()->json([
+                return $this->jsonResponse([
                     'success' => false,
                     'error' => 'Unrecognized user email synapse address.'
                 ], 404);
@@ -186,21 +186,21 @@ class AuthController extends Controller
                 if ($email === 'admin@nexkey.com' && $password === 'password123') {
                     // Allowed
                 } else {
-                    return response()->json([
+                    return $this->jsonResponse([
                         'success' => false,
                         'error' => 'Invalid decryption key hexcode. Try: password123'
                     ], 401);
                 }
             }
 
-            return response()->json([
+            return $this->jsonResponse([
                 'success' => true,
                 'user' => $user,
                 'message' => 'Decryption verified.'
             ]);
 
         } catch (\Exception $e) {
-            return response()->json([
+            return $this->jsonResponse([
                 'success' => false,
                 'error' => $e->getMessage()
             ], 500);
@@ -220,7 +220,7 @@ class AuthController extends Controller
             $username = trim($request->input('username'));
 
             if (!preg_match('/^[a-zA-Z0-9]{3,15}$/', $username)) {
-                return response()->json([
+                return $this->jsonResponse([
                     'success' => false,
                     'error' => 'Username must be alphanumeric, between 3 and 15 characters.'
                 ], 400);
@@ -228,7 +228,7 @@ class AuthController extends Controller
 
             $userWithSameName = User::where('username', $username)->first();
             if ($userWithSameName && $userWithSameName->id !== $userId) {
-                return response()->json([
+                return $this->jsonResponse([
                     'success' => false,
                     'error' => 'Username coordinate registered elsewhere on the grid.'
                 ], 400);
@@ -236,7 +236,7 @@ class AuthController extends Controller
 
             $user = User::find($userId);
             if (!$user) {
-                return response()->json([
+                return $this->jsonResponse([
                     'success' => false,
                     'error' => 'Node context match not found.'
                 ], 404);
@@ -247,14 +247,14 @@ class AuthController extends Controller
                 'avatar_url' => $user->avatar_url ?: "https://api.dicebear.com/7.x/bottts-neutral/svg?seed={$username}"
             ]);
 
-            return response()->json([
+            return $this->jsonResponse([
                 'success' => true,
                 'user' => $user,
                 'message' => 'Username successfully registered to current synapse!'
             ]);
 
         } catch (\Exception $e) {
-            return response()->json([
+            return $this->jsonResponse([
                 'success' => false,
                 'error' => $e->getMessage()
             ], 500);

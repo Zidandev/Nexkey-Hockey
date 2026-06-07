@@ -38,13 +38,13 @@ class AdminController extends Controller
                 return array_merge($p->toArray(), ['stats' => $stats]);
             });
 
-            return response()->json([
+            return $this->jsonResponse([
                 'success' => true,
                 'players' => $playersWithStats
             ]);
 
         } catch (\Exception $e) {
-            return response()->json([
+            return $this->jsonResponse([
                 'success' => false,
                 'error' => $e->getMessage()
             ], 500);
@@ -57,7 +57,7 @@ class AdminController extends Controller
         try {
             $user = User::find($id);
             if (!$user) {
-                return response()->json([
+                return $this->jsonResponse([
                     'success' => false,
                     'error' => 'User not found'
                 ], 404);
@@ -76,14 +76,14 @@ class AdminController extends Controller
 
             $user->update($updates);
 
-            return response()->json([
+            return $this->jsonResponse([
                 'success' => true,
-                'user' => $user,
+                'user' => $user->fresh(),
                 'stats' => PlayerStat::where('user_id', $id)->first()
             ]);
 
         } catch (\Exception $e) {
-            return response()->json([
+            return $this->jsonResponse([
                 'success' => false,
                 'error' => $e->getMessage()
             ], 500);
@@ -96,7 +96,7 @@ class AdminController extends Controller
         try {
             $user = User::find($id);
             if (!$user) {
-                return response()->json([
+                return $this->jsonResponse([
                     'success' => false,
                     'error' => 'User not found'
                 ], 404);
@@ -104,13 +104,13 @@ class AdminController extends Controller
 
             $user->delete();
 
-            return response()->json([
+            return $this->jsonResponse([
                 'success' => true,
                 'message' => 'User deleted successfully'
             ]);
 
         } catch (\Exception $e) {
-            return response()->json([
+            return $this->jsonResponse([
                 'success' => false,
                 'error' => $e->getMessage()
             ], 500);
@@ -128,7 +128,7 @@ class AdminController extends Controller
             $totalMatchesPlayed = MatchHistory::count();
             $totalCredits = User::sum('currency');
 
-            return response()->json([
+            return $this->jsonResponse([
                 'success' => true,
                 'stats' => [
                     'usersCount' => $usersCount,
@@ -141,7 +141,7 @@ class AdminController extends Controller
             ]);
 
         } catch (\Exception $e) {
-            return response()->json([
+            return $this->jsonResponse([
                 'success' => false,
                 'error' => $e->getMessage()
             ], 500);

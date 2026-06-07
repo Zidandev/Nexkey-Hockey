@@ -16,7 +16,7 @@ class UserController extends Controller
         try {
             $user = User::find($id);
             if (!$user) {
-                return response()->json([
+                return $this->jsonResponse([
                     'success' => false,
                     'error' => 'User not found'
                 ], 404);
@@ -43,7 +43,7 @@ class UserController extends Controller
                 ->orderBy('played_at', 'desc')
                 ->get();
 
-            return response()->json([
+            return $this->jsonResponse([
                 'success' => true,
                 'user' => $user,
                 'stats' => $stats,
@@ -52,7 +52,7 @@ class UserController extends Controller
             ]);
 
         } catch (\Exception $e) {
-            return response()->json([
+            return $this->jsonResponse([
                 'success' => false,
                 'error' => $e->getMessage()
             ], 500);
@@ -65,7 +65,7 @@ class UserController extends Controller
         try {
             $user = User::find($id);
             if (!$user) {
-                return response()->json([
+                return $this->jsonResponse([
                     'success' => false,
                     'error' => 'User match not found'
                 ], 404);
@@ -84,7 +84,7 @@ class UserController extends Controller
             // Conflict check
             $existing = User::where('username', $username)->first();
             if ($existing && $existing->id !== (int)$id) {
-                return response()->json([
+                return $this->jsonResponse([
                     'success' => false,
                     'error' => 'Username is already configured on another profile'
                 ], 400);
@@ -101,7 +101,7 @@ class UserController extends Controller
             $inventory = Inventory::where('user_id', $id)->pluck('item_id')->toArray();
             $history = MatchHistory::where('user_id', $id)->orderBy('played_at', 'desc')->get();
 
-            return response()->json([
+            return $this->jsonResponse([
                 'success' => true,
                 'user' => $user,
                 'stats' => $stats,
@@ -110,7 +110,7 @@ class UserController extends Controller
             ]);
 
         } catch (\Exception $e) {
-            return response()->json([
+            return $this->jsonResponse([
                 'success' => false,
                 'error' => $e->getMessage()
             ], 500);

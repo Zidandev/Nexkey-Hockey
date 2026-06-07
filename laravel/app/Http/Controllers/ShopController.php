@@ -15,12 +15,12 @@ class ShopController extends Controller
     {
         try {
             $items = ShopItem::all();
-            return response()->json([
+            return $this->jsonResponse([
                 'success' => true,
                 'items' => $items
             ]);
         } catch (\Exception $e) {
-            return response()->json([
+            return $this->jsonResponse([
                 'success' => false,
                 'error' => $e->getMessage()
             ], 500);
@@ -41,7 +41,7 @@ class ShopController extends Controller
 
             $user = User::find($userId);
             if (!$user) {
-                return response()->json([
+                return $this->jsonResponse([
                     'success' => false,
                     'error' => 'User not found'
                 ], 404);
@@ -49,7 +49,7 @@ class ShopController extends Controller
 
             $item = ShopItem::find($itemId);
             if (!$item) {
-                return response()->json([
+                return $this->jsonResponse([
                     'success' => false,
                     'error' => 'Item not found'
                 ], 404);
@@ -58,7 +58,7 @@ class ShopController extends Controller
             // Verify if owned
             $owned = Inventory::where('user_id', $userId)->where('item_id', $itemId)->exists();
             if ($owned) {
-                return response()->json([
+                return $this->jsonResponse([
                     'success' => false,
                     'error' => 'Item already purchased'
                 ], 400);
@@ -66,7 +66,7 @@ class ShopController extends Controller
 
             // Verify funds
             if ($user->currency < $item->cost) {
-                return response()->json([
+                return $this->jsonResponse([
                     'success' => false,
                     'error' => 'Insufficient credits'
                 ], 400);
@@ -84,14 +84,14 @@ class ShopController extends Controller
             // Get updated inventory
             $inventory = Inventory::where('user_id', $userId)->pluck('item_id')->toArray();
 
-            return response()->json([
+            return $this->jsonResponse([
                 'success' => true,
                 'user' => $user->fresh(),
                 'inventory' => $inventory
             ]);
 
         } catch (\Exception $e) {
-            return response()->json([
+            return $this->jsonResponse([
                 'success' => false,
                 'error' => $e->getMessage()
             ], 500);
@@ -112,7 +112,7 @@ class ShopController extends Controller
 
             $user = User::find($userId);
             if (!$user) {
-                return response()->json([
+                return $this->jsonResponse([
                     'success' => false,
                     'error' => 'User not found'
                 ], 404);
@@ -120,7 +120,7 @@ class ShopController extends Controller
 
             $item = ShopItem::find($itemId);
             if (!$item) {
-                return response()->json([
+                return $this->jsonResponse([
                     'success' => false,
                     'error' => 'Item not found'
                 ], 404);
@@ -129,7 +129,7 @@ class ShopController extends Controller
             // Ensure ownership
             $owned = Inventory::where('user_id', $userId)->where('item_id', $itemId)->exists();
             if (!$owned) {
-                return response()->json([
+                return $this->jsonResponse([
                     'success' => false,
                     'error' => 'You do not own this skin'
                 ], 400);
@@ -142,13 +142,13 @@ class ShopController extends Controller
                 $user->update(['active_board_skin' => $itemId]);
             }
 
-            return response()->json([
+            return $this->jsonResponse([
                 'success' => true,
-                'user' => $user
+                'user' => $user->fresh()
             ]);
 
         } catch (\Exception $e) {
-            return response()->json([
+            return $this->jsonResponse([
                 'success' => false,
                 'error' => $e->getMessage()
             ], 500);

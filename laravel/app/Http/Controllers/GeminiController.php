@@ -96,7 +96,7 @@ class GeminiController extends Controller
 
             // Fallback replies if API Key is not configured
             if (!$apiKey) {
-                return response()->json([
+                return $this->jsonResponse([
                     'success' => true,
                     'text' => $this->getDynamicDialogueFallback($lang, $scorer, $puckVelocity, $phase)
                 ]);
@@ -162,14 +162,14 @@ class GeminiController extends Controller
                 $content = $response->json();
                 $replyText = $content['candidates'][0]['content']['parts'][0]['text'] ?? '';
                 if (!empty(trim($replyText))) {
-                    return response()->json([
+                    return $this->jsonResponse([
                         'success' => true,
                         'text' => trim($replyText)
                     ]);
                 }
             }
 
-            return response()->json([
+            return $this->jsonResponse([
                 'success' => true,
                 'text' => $this->getDynamicDialogueFallback($lang, $scorer, $puckVelocity, $phase)
             ]);
@@ -179,7 +179,7 @@ class GeminiController extends Controller
             $scorer = $request->input('scorer', 'player');
             $puckVelocity = (float)$request->input('puckVelocity', 0);
             $phase = (int)$request->input('phase', 1);
-            return response()->json([
+            return $this->jsonResponse([
                 'success' => true,
                 'text' => $this->getDynamicDialogueFallback($lang, $scorer, $puckVelocity, $phase)
             ]);

@@ -29,7 +29,7 @@ class MatchController extends Controller
             $userId = $request->input('userId');
             $user = User::find($userId);
             if (!$user) {
-                return response()->json([
+                return $this->jsonResponse([
                     'success' => false,
                     'error' => 'Missing userId context'
                 ], 404);
@@ -89,7 +89,7 @@ class MatchController extends Controller
                 return $match;
             });
 
-            return response()->json([
+            return $this->jsonResponse([
                 'success' => true,
                 'user' => $user->fresh(),
                 'stats' => PlayerStat::where('user_id', $userId)->first(),
@@ -97,7 +97,7 @@ class MatchController extends Controller
             ]);
 
         } catch (\Exception $e) {
-            return response()->json([
+            return $this->jsonResponse([
                 'success' => false,
                 'error' => $e->getMessage()
             ], 500);
